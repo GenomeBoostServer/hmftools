@@ -59,7 +59,7 @@ public class HighDepthTask implements Callable
     @Override
     public Long call()
     {
-        RefGenomeCoordinates refGenomeCoords = mConfig.RefGenVersion == V37 ?
+        RefGenomeCoordinates refGenomeCoords = mConfig.RefGenVersion.is37() ?
                 RefGenomeCoordinates.COORDS_37 : RefGenomeCoordinates.COORDS_38;
 
         int chromosomeLength = refGenomeCoords.length(stripChrPrefix(mChromosome));
