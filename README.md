@@ -2,6 +2,16 @@
 
 This repository contains the suite of tools used in the Hartwig Medical Foundation whole genome,targeted DNA and whole transcriptome analysis pipeline.  
 
+## Fork Notice
+
+This is a modified version of the original [hmftools](https://github.com/hartwigmedical/hmftools) by the Hartwig Medical Foundation.
+
+Modifications by Genome4me Incorporated are for use in clinical pipelines.
+
+This software is distributed under the GPL-3 license, same as the original.
+
+Original source: https://github.com/hartwigmedical/hmftools
+
 ## DNA Pipeline Components
 
 ![HMF_Pipeline](./pipeline/hmf_tools_pipeline.png)
