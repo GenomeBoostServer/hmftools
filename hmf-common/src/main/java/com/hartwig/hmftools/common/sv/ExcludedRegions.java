@@ -39,7 +39,20 @@ public final class ExcludedRegions
 
     public static List<ChrBaseRegion> getPolyGRegions(final RefGenomeVersion refGenomeVersion)
     {
-        return refGenomeVersion.is37() ? POLY_G_REGIONS_V37 : POLY_G_REGIONS_V38;
+        // coordinates come from the coordinate version (is37); chromosome naming is aligned
+        // to the ref genome version (e.g. V19 = GRCh37 coordinates with a chr prefix)
+        List<ChrBaseRegion> baseRegions = refGenomeVersion.is37() ?
+                POLY_G_REGIONS_V37 : POLY_G_REGIONS_V38;
+
+        List<ChrBaseRegion> regions = Lists.newArrayList();
+        for(ChrBaseRegion region : baseRegions)
+        {
+            regions.add(new ChrBaseRegion(
+                    refGenomeVersion.versionedChromosome(region.Chromosome),
+                    region.start(), region.end()));
+        }
+
+        return regions;
     }
 
 }

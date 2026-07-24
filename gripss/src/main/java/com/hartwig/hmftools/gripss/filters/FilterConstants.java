@@ -1,7 +1,6 @@
 package com.hartwig.hmftools.gripss.filters;
 
 import static com.hartwig.hmftools.common.genome.refgenome.RefGenomeVersion.REF_GENOME_VERSION;
-import static com.hartwig.hmftools.common.genome.refgenome.RefGenomeVersion.V37;
 import static com.hartwig.hmftools.common.sv.ExcludedRegions.getPolyGRegions;
 
 import java.util.List;
@@ -82,6 +81,13 @@ public class FilterConstants
     {
         RefGenomeVersion refGenVersion = RefGenomeVersion.from(cmd);
 
+        // select PMS2 region by coordinate version (is37) and align chromosome naming to
+        // the ref genome version (V19 = GRCh37 coordinates with a chr prefix)
+        ChrBaseRegion pms2Base = refGenVersion.is37() ? PMS2_V37 : PMS2_V38;
+        ChrBaseRegion pms2Region = new ChrBaseRegion(
+                refGenVersion.versionedChromosome(pms2Base.Chromosome),
+                pms2Base.start(), pms2Base.end());
+
         return new FilterConstants(
                 Integer.parseInt(cmd.getOptionValue(HARD_MIN_TUMOR_QUAL_CFG, String.valueOf(DEFAULT_HARD_MIN_TUMOR_QUAL))),
                 Integer.parseInt(cmd.getOptionValue(
@@ -102,7 +108,7 @@ public class FilterConstants
                 Integer.parseInt(cmd.getOptionValue(MAX_HOM_LENGTH_SHORT_INV_CFG, String.valueOf(DEFAULT_MAX_HOM_LENGTH_SHORT_INV))),
                 Integer.parseInt(cmd.getOptionValue(MIN_LENGTH_CFG, String.valueOf(DEFAULT_MIN_LENGTH))),
                 Integer.parseInt(cmd.getOptionValue(PON_DISTANCE, String.valueOf(DEFAULT_PON_DISTANCE))),
-                getPolyGRegions(refGenVersion), refGenVersion == V37 ? PMS2_V37 : PMS2_V38,
+                getPolyGRegions(refGenVersion), pms2Region,
                 cmd.hasOption(FILTER_SGLS));
     }
 

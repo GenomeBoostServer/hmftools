@@ -4,6 +4,16 @@ This repository contains the suite of tools used in the Hartwig Medical Foundati
 
 Check out [_what's new_](https://github.com/hartwigmedical/hmftools/wiki/What's-new).
 
+## Fork Notice
+
+This is a modified version of the original [hmftools](https://github.com/hartwigmedical/hmftools) by the Hartwig Medical Foundation.
+
+Modifications by Genome4me Incorporated are for use in clinical pipelines.
+
+This software is distributed under the GPL-3 license, same as the original.
+
+Original source: https://github.com/hartwigmedical/hmftools
+
 ## DNA Pipeline Components
 
 ![HMF_Pipeline](./pipeline/hmf_tools_pipeline.png)

@@ -150,7 +150,7 @@ public class VcfWriter
         {
             String chromosome = seqRecord.getContig();
 
-            if(mConfig.RefGenVersion == V38)
+            if(mConfig.RefGenVersion.isChrPrefixed())
                 chromosome = RefGenomeFunctions.enforceChrPrefix(chromosome);
 
             List<Breakend> breakendList = mDataCache.getBreakendMap().get(chromosome);
