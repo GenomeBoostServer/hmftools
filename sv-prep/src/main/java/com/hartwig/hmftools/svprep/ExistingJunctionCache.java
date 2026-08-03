@@ -10,6 +10,7 @@ import static com.hartwig.hmftools.svprep.SvCommon.SV_LOGGER;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -91,16 +92,21 @@ public class ExistingJunctionCache
                 int position = Integer.parseInt(values[posIndex]);
                 byte orientation = Byte.parseByte(values[orientIndex]);
 
+                // Append via computeIfAbsent instead of replacing map entry on boundaries.
+                // This ensures all junction blocks are preserved when records are written
+                // out-of-order by global partition queue; post-load sort restores order.
                 if(!currentChromosome.equals(chromosome))
                 {
                     currentChromosome = chromosome;
-                    junctionDataList = Lists.newArrayList();
-                    mChrJunctions.put(chromosome, junctionDataList);
+                    junctionDataList = mChrJunctions.computeIfAbsent(
+                            chromosome, x -> Lists.newArrayList());
                 }
 
                 junctionDataList.add(new JunctionData(position, orientation, null));
                 ++junctionCount;
             }
+
+            mChrJunctions.values().forEach(x -> x.sort(Comparator.comparingInt(j -> j.Position)));
 
             SV_LOGGER.info("loaded {} existing junctions from file: {}", junctionCount, filename);
         }

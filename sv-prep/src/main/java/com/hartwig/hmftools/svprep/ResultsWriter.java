@@ -249,13 +249,26 @@ public class ResultsWriter
                         ++lowMapQualFrags;
                 }
 
-                mJunctionWriter.write(format("%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d",
-                        chromosome, junctionData.Position, junctionData.Orientation, junctionData.junctionFragmentCount(),
-                        exactSupportFrags, discordantFrags, lowMapQualFrags, maxMapQual));
+                StringBuilder line = new StringBuilder();
 
-                mJunctionWriter.write(format("\t%d\t%d\t%s\t%s\t%s\t%s\t%s",
-                        maxSoftClip, junctionData.depth(), hasPloyAT, junctionData.internalIndel(), junctionData.hotspot(),
-                        softClipBases, junctionData.topJunctionRead() != null ? junctionData.topJunctionRead().id() : "EXISTING"));
+                line.append(chromosome).append('\t')
+                        .append(junctionData.Position).append('\t')
+                        .append(junctionData.Orientation).append('\t')
+                        .append(junctionData.junctionFragmentCount()).append('\t')
+                        .append(exactSupportFrags).append('\t')
+                        .append(discordantFrags).append('\t')
+                        .append(lowMapQualFrags).append('\t')
+                        .append(maxMapQual);
+
+                line.append('\t').append(maxSoftClip)
+                        .append('\t').append(junctionData.depth())
+                        .append('\t').append(hasPloyAT)
+                        .append('\t').append(junctionData.internalIndel())
+                        .append('\t').append(junctionData.hotspot())
+                        .append('\t').append(softClipBases)
+                        .append('\t').append(junctionData.topJunctionRead() != null
+                                ? junctionData.topJunctionRead().id()
+                                : "EXISTING");
 
                 if(mConfig.TrackRemotes)
                 {
@@ -278,10 +291,14 @@ public class ResultsWriter
                         remoteJunctionsStr = sj.toString();
                     }
 
-                    mJunctionWriter.write(format("\t%d\t%s", junctionData.RemoteJunctions.size(), remoteJunctionsStr));
+                    line.append('\t').append(junctionData.RemoteJunctions.size())
+                            .append('\t').append(remoteJunctionsStr);
                 }
 
-                mJunctionWriter.newLine();
+                line.append('\n');
+                // Write junction data as a single streaming line including
+                // newline to avoid split-write race conditions.
+                mJunctionWriter.write(line.toString());
             }
         }
         catch(IOException e)

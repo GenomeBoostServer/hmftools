@@ -97,35 +97,45 @@ public class ChromosomeTask
 
     private List<ChrBaseRegion> partition(final String chromosome)
     {
-        if(!mConfig.SpecificChrRegions.Regions.isEmpty())
+        return buildPartitions(chromosome, mConfig);
+    }
+
+    // Static helper so global partition queue builds identical partitions.
+    // NOTE: partitionSize feeds SpanningReadCache key (formChromosomePartition).
+    public static List<ChrBaseRegion> buildPartitions(
+            final String chromosome, final SvConfig config)
+    {
+        if(!config.SpecificChrRegions.Regions.isEmpty())
         {
             List<ChrBaseRegion> partitions = Lists.newArrayList();
 
-            for(ChrBaseRegion region : mConfig.SpecificChrRegions.Regions)
+            for(ChrBaseRegion region : config.SpecificChrRegions.Regions)
             {
                 if(region.Chromosome.equals(chromosome))
                 {
-                    partitions.addAll(partition(chromosome, region.start() ,region.end()));
+                    partitions.addAll(buildPartitions(
+                            chromosome, region.start(), region.end(), config));
                 }
             }
 
             return partitions;
         }
 
-        RefGenomeCoordinates refGenomeCoords = mConfig.RefGenVersion.is37() ?
+        RefGenomeCoordinates refGenomeCoords = config.RefGenVersion.is37() ?
                 RefGenomeCoordinates.COORDS_37 : RefGenomeCoordinates.COORDS_38;
         int chromosomeLength = refGenomeCoords.length(stripChrPrefix(chromosome));
-        return partition(chromosome, 1, chromosomeLength);
+        return buildPartitions(chromosome, 1, chromosomeLength, config);
     }
 
-    private List<ChrBaseRegion> partition(final String chromosome, int minPosition, int maxPosition)
+    private static List<ChrBaseRegion> buildPartitions(
+            final String chromosome, int minPosition, int maxPosition, final SvConfig config)
     {
         final List<ChrBaseRegion> partitions = Lists.newArrayList();
 
         for(int i = 0; ; i++)
         {
-            int start = minPosition + i * mConfig.PartitionSize;
-            int end = min(start + mConfig.PartitionSize - 1, maxPosition);
+            int start = minPosition + i * config.PartitionSize;
+            int end = min(start + config.PartitionSize - 1, maxPosition);
             partitions.add(new ChrBaseRegion(chromosome, start, end));
 
             if(end >= maxPosition)

@@ -88,6 +88,7 @@ public class SvConfig
     public final SpecificRegions SpecificChrRegions;
     public final List<String> LogReadIds;
     public final boolean TrackRemotes;
+    public final boolean GlobalQueue;   // Process all chromosomes from a single partition queue
     public final boolean PerfDebug;
 
     // throttling and down-sampling - off by default
@@ -114,6 +115,7 @@ public class SvConfig
     private static final String CAPTURE_DEPTH = "capture_depth";
     private static final String TRACK_REMOTES = "track_remotes";
     private static final String NO_CACHE_BAM = "no_cache_bam";
+    private static final String PER_CHROMOSOME = "per_chromosome";
     private static final String NO_CLEAN_UP = "no_clean_up";
     private static final String NO_TRIM_READ_ID = "no_trim_read_id";
     private static final String JUNCTION_FRAGS_CAP = "junction_frags_cap";
@@ -193,6 +195,7 @@ public class SvConfig
         JunctionFragmentCap = configBuilder.getInteger(JUNCTION_FRAGS_CAP);
         CaptureDepth = configBuilder.hasFlag(CAPTURE_DEPTH);
         TrackRemotes = configBuilder.hasFlag(TRACK_REMOTES);
+        GlobalQueue = !configBuilder.hasFlag(PER_CHROMOSOME);
         NoCleanUp = configBuilder.hasFlag(NO_CLEAN_UP);
         PerfDebug = configBuilder.hasFlag(PERF_DEBUG);
     }
@@ -271,6 +274,7 @@ public class SvConfig
         MaxPartitionReads = 0;
         TrackRemotes = true;
         UseCacheBam = false;
+        GlobalQueue = true;
         PerfDebug = false;
         TrimReadId = false;
         UnpairedReads = false;
@@ -296,6 +300,9 @@ public class SvConfig
         configBuilder.addInteger(MAX_PARTITION_READS, "Limit to stop processing reads in partition, for debug", 0);
         configBuilder.addFlag(CAPTURE_DEPTH, "Capture depth for junctions");
         configBuilder.addFlag(NO_CACHE_BAM, "Write a BAM to cache candidate reads");
+        configBuilder.addFlag(
+                PER_CHROMOSOME,
+                "Process chromosomes sequentially with per-chromosome thread pools");
         configBuilder.addFlag(TRACK_REMOTES, "Track support for remote junctions");
         configBuilder.addFlag(NO_TRIM_READ_ID, "Disable use of a shortened readId internally");
         configBuilder.addFlag(NO_CLEAN_UP, "Keep candidate cache BAM files");
