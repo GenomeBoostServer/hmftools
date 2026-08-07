@@ -88,8 +88,21 @@ public class ReadGroup
 
     public boolean hasJunctionPosition(final JunctionData junctionData)
     {
-        return mJunctionPositions != null
-                && mJunctionPositions.stream().anyMatch(x -> x.Position == junctionData.Position && x.Orientation == junctionData.Orientation);
+        // Indexed loop rather than stream(): the list holds only a few entries, but this is called
+        // per junction-read pair, so the per-call pipeline objects and the capturing lambda cost
+        // more than the comparison itself.
+        if(mJunctionPositions == null)
+            return false;
+
+        for(int i = 0; i < mJunctionPositions.size(); ++i)
+        {
+            JunctionPosition jp = mJunctionPositions.get(i);
+
+            if(jp.Position == junctionData.Position && jp.Orientation == junctionData.Orientation)
+                return true;
+        }
+
+        return false;
     }
 
     public boolean noRegisteredfJunctionPositions() { return mJunctionPositions == null; }

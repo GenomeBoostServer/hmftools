@@ -847,7 +847,7 @@ public class JunctionTracker
 
         final ReadRecord juncRead = junctionData.topJunctionRead();
 
-        int readLength = read.readBases().length();
+        int readLength = read.readBasesLength();
 
         if(junctionData.Orientation == POS_ORIENT)
         {
@@ -890,7 +890,7 @@ public class JunctionTracker
 
             int readEndPosIndex = readLength - scLength - 1;
 
-            int juncReadLength = juncRead.readBases().length();
+            int juncReadLength = juncRead.readBasesLength();
             int juncReadScLength = juncRead.cigar().getLastCigarElement().getLength();
             int juncReadEndPosIndex = juncReadLength - juncReadScLength - 1;
             int endPosDiff = juncRead.end() - readRightPos;
@@ -905,15 +905,20 @@ public class JunctionTracker
 
             int highQualMismatches = 0;
             int baseMatches = 0;
+
+            // called once here: SAMRecord.getReadString() creates a new String on every call
+            final String readBaseStr = read.readBases();
+            final String juncReadBaseStr = juncRead.readBases();
+
             for(int i = startIndex; i < readLength; ++i)
             {
-                char readBase = read.readBases().charAt(i);
+                char readBase = readBaseStr.charAt(i);
 
                 int juncIndex = i + junctionReadOffset;
                 if(juncIndex < 0 || juncIndex >= juncReadLength)
                     return false;
 
-                char juncReadBase = juncRead.readBases().charAt(juncIndex);
+                char juncReadBase = juncReadBaseStr.charAt(juncIndex);
 
                 if(readBase == juncReadBase)
                 {
@@ -980,7 +985,7 @@ public class JunctionTracker
             int posOffset = juncRead.start() - readLeftPos;
             int softClipDiff = juncReadScLength - scLength;
             int junctionReadOffset = softClipDiff - posOffset;
-            int juncReadLength = juncRead.readBases().length();
+            int juncReadLength = juncRead.readBasesLength();
 
             // check matches from the SC bases up until the end of the first match element or junction/read diff
             int endIndex = scLength + min(max(junctionData.Position - read.start(), 0), firstMatchLength);
@@ -988,15 +993,19 @@ public class JunctionTracker
             int highQualMismatches = 0;
             int baseMatches = 0;
 
+            // called once here: SAMRecord.getReadString() creates a new String on every call
+            final String readBaseStr = read.readBases();
+            final String juncReadBaseStr = juncRead.readBases();
+
             for(int i = 0; i < endIndex; ++i)
             {
-                char readBase = read.readBases().charAt(i);
+                char readBase = readBaseStr.charAt(i);
 
                 int juncIndex = i + junctionReadOffset;
                 if(juncIndex < 0 || juncIndex >= juncReadLength)
                     return false;
 
-                char juncReadBase = juncRead.readBases().charAt(juncIndex);
+                char juncReadBase = juncReadBaseStr.charAt(juncIndex);
 
                 if(readBase == juncReadBase)
                 {

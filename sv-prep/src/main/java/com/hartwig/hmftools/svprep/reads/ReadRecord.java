@@ -26,6 +26,7 @@ import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.CigarOperator;
 import htsjdk.samtools.SAMFlag;
 import htsjdk.samtools.SAMRecord;
+import htsjdk.samtools.util.StringUtil;
 
 public class ReadRecord
 {
@@ -104,6 +105,17 @@ public class ReadRecord
     public boolean hasSuppAlignment() { return mSupplementaryAlignment != null && HumanChromosome.contains(mSupplementaryAlignment.Chromosome); }
 
     public String readBases() { return mRecord.getReadString(); }
+
+    /**
+     * Length of readBases() without creating the String. getReadString() builds a new String
+     * from the byte[] on every call. Note it yields "*" (length 1) for an empty SEQ, so that
+     * case maps to 1 here - do NOT substitute SAMRecord.getReadLength(), which gives 0.
+     */
+    public int readBasesLength()
+    {
+        int len = mRecord.getReadBases().length;
+        return len > 0 ? len : 1;
+    }
     public byte[] baseQualities() { return mRecord.getBaseQualities(); }
 
     public void setFilters(int filters) { mFilters = filters; }
@@ -146,7 +158,9 @@ public class ReadRecord
         int readLength = record.getReadBases().length;
         int scStart = isClippedLeft ? 0 : readLength - scLength;
         int scEnd = isClippedLeft ? scLength : readLength;
-        return record.getReadString().substring(scStart, scEnd);
+        // build only the clipped span - getReadString() would build the whole read first, then
+        // substring() would copy it again. This is the same conversion getReadString() uses.
+        return StringUtil.bytesToString(record.getReadBases(), scStart, scEnd - scStart);
     }
 
     public static boolean hasPolyATSoftClip(final ReadRecord read, final boolean isClippedLeft)
