@@ -42,6 +42,7 @@ public class DepthConfig
     public final ValidationStringency BamStringency;
 
     public final int Threads;
+    public final int PartitionSize;
     public final double PerfLogTime;
     public final List<ChrBaseRegion> SpecificRegions;
 
@@ -52,12 +53,17 @@ public class DepthConfig
     private static final String PROXIMITY_DISTANCE = "proximity_distance";
     private static final String VAF_CAP = "vaf_cap";
     private static final String PERF_LOG_TIME = "perf_log_time";
+    private static final String PARTITION_SIZE = "partition_size";
     public static final String VCF_TAG_PREFIX = "vcf_tag_prefix";
 
     private static final String DELIM = ",";
 
     protected static final int DEFAULT_PROXIMITY_DISTANCE = 2000;
     protected static final double DEFAULT_VAF_CAP = 0.001;
+
+    // window size for memory-bounded, region-partitioned processing. Smaller windows lower peak
+    // memory; output is unchanged because windows are gap-aligned (a variant group is never split)
+    protected static final int DEFAULT_PARTITION_SIZE = 5000000;
 
     public DepthConfig(final ConfigBuilder configBuilder)
     {
@@ -73,6 +79,7 @@ public class DepthConfig
         ProximityDistance = configBuilder.getInteger(PROXIMITY_DISTANCE);
         BamStringency = BamUtils.validationStringency(configBuilder);
         PerfLogTime = configBuilder.getDecimal(PERF_LOG_TIME);
+        PartitionSize = configBuilder.getInteger(PARTITION_SIZE);
 
         Threads = parseThreads(configBuilder);
 
@@ -106,6 +113,10 @@ public class DepthConfig
 
         configBuilder.addDecimal(VAF_CAP, "Ref support depth limit as function of variant fragments", DEFAULT_VAF_CAP);
         configBuilder.addInteger(PROXIMITY_DISTANCE, "Proximity distance to group variants", DEFAULT_PROXIMITY_DISTANCE);
+        configBuilder.addInteger(
+                PARTITION_SIZE,
+                "Genomic window size for memory-bounded processing",
+                DEFAULT_PARTITION_SIZE);
 
         addValidationStringencyOption(configBuilder);
         addSpecificChromosomesRegionsConfig(configBuilder);
@@ -131,6 +142,7 @@ public class DepthConfig
         BamStringency = ValidationStringency.STRICT;
         PerfLogTime = 0;
         Threads = 0;
+        PartitionSize = DEFAULT_PARTITION_SIZE;
 
         SpecificRegions = Lists.newArrayList();
         VcfTagPrefix = "";

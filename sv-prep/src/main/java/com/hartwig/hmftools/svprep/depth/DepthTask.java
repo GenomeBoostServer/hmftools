@@ -63,6 +63,15 @@ public class DepthTask implements Callable
 
     public DepthTask(final String chromosome, final DepthConfig config, final Map<String,Integer> sampleVcfGenotypeIds)
     {
+        this(chromosome, config, sampleVcfGenotypeIds, null);
+    }
+
+    // when sharedReaders is non-null the task reuses them instead of opening its own. A worker
+    // opens its SamReaders once and shares them across windows (avoids per-window reader churn)
+    public DepthTask(
+            final String chromosome, final DepthConfig config,
+            final Map<String,Integer> sampleVcfGenotypeIds, final List<SamReader> sharedReaders)
+    {
         mConfig = config;
         mChromosome = chromosome;
         mSampleVcfGenotypeIds = sampleVcfGenotypeIds;
@@ -77,7 +86,11 @@ public class DepthTask implements Callable
         mSamReaders = Lists.newArrayList();
         mBamSlicer = new BamSlicer(0, false, true, false);
 
-        if(!mConfig.BamFiles.isEmpty())
+        if(sharedReaders != null)
+        {
+            mSamReaders.addAll(sharedReaders);
+        }
+        else if(!mConfig.BamFiles.isEmpty())
         {
             for(String bamFile : mConfig.BamFiles)
             {
@@ -90,6 +103,20 @@ public class DepthTask implements Callable
         mCurrentSampleIndex = 0;
 
         mPerfCounter = new PerformanceCounter("Slice");
+    }
+
+    public static List<SamReader> openSamReaders(final DepthConfig config)
+    {
+        List<SamReader> samReaders = Lists.newArrayList();
+
+        for(String bamFile : config.BamFiles)
+        {
+            samReaders.add(SamReaderFactory.makeDefault()
+                    .validationStringency(config.BamStringency)
+                    .referenceSequence(new File(config.RefGenome)).open(new File(bamFile)));
+        }
+
+        return samReaders;
     }
 
     public String chromosome() { return mChromosome; }

@@ -1,57 +1,57 @@
 package com.hartwig.hmftools.svprep.depth;
 
-import static java.lang.String.format;
+import static java.lang.Math.max;
+import static java.lang.Math.min;
 
-import static com.hartwig.hmftools.common.sv.SvVcfTags.ALLELE_FRACTION;
-import static com.hartwig.hmftools.common.sv.SvVcfTags.ALLELE_FRACTION_DESC;
-import static com.hartwig.hmftools.common.sv.SvVcfTags.REF_DEPTH;
-import static com.hartwig.hmftools.common.sv.SvVcfTags.REF_DEPTH_PAIR;
-import static com.hartwig.hmftools.common.sv.SvVcfTags.REF_DEPTH_PAIR_DESC;
-import static com.hartwig.hmftools.common.sv.SvVcfTags.REF_DEPTH_DESC;
+import static com.hartwig.hmftools.common.region.PartitionUtils.partitionChromosome;
 import static com.hartwig.hmftools.common.utils.PerformanceCounter.runTimeMinsStr;
+import static com.hartwig.hmftools.common.utils.TaskExecutor.runThreadTasks;
 import static com.hartwig.hmftools.svprep.SvCommon.APP_NAME;
 import static com.hartwig.hmftools.svprep.SvCommon.SV_LOGGER;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.InputStreamReader;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Callable;
-import java.util.stream.Collectors;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.hartwig.hmftools.common.genome.chromosome.HumanChromosome;
+import com.hartwig.hmftools.common.region.ChrBaseRegion;
 import com.hartwig.hmftools.common.region.ExcludedRegions;
 import com.hartwig.hmftools.common.utils.PerformanceCounter;
-import com.hartwig.hmftools.common.utils.TaskExecutor;
 import com.hartwig.hmftools.common.utils.config.ConfigBuilder;
-import com.hartwig.hmftools.common.region.ChrBaseRegion;
 import com.hartwig.hmftools.common.variant.VcfFileReader;
+import com.hartwig.hmftools.svprep.reads.PartitionTask;
 
 import org.jetbrains.annotations.NotNull;
 
-import htsjdk.variant.variantcontext.VariantContext;
-import htsjdk.variant.variantcontext.VariantContextBuilder;
-import htsjdk.variant.variantcontext.writer.VariantContextWriter;
-import htsjdk.variant.variantcontext.writer.VariantContextWriterBuilder;
-import htsjdk.variant.vcf.VCFFormatHeaderLine;
+import htsjdk.samtools.util.BlockCompressedInputStream;
+import htsjdk.tribble.index.IndexFactory;
+import htsjdk.tribble.index.tabix.TabixFormat;
+import htsjdk.tribble.index.tabix.TabixIndex;
+import htsjdk.variant.vcf.VCFCodec;
 import htsjdk.variant.vcf.VCFHeader;
-import htsjdk.variant.vcf.VCFHeaderLineType;
-import htsjdk.variant.vcf.VCFInfoHeaderLine;
 
 public class DepthAnnotator
 {
     private final DepthConfig mConfig;
     private final Map<String,Integer> mSampleVcfGenotypeIds;
-
-    private final Map<String,List<VariantContext>> mChrVariantMap;
     private final List<ChrBaseRegion> mExcludedRegions;
 
     public DepthAnnotator(final ConfigBuilder configBuilder)
     {
         mConfig = new DepthConfig(configBuilder);
-        mChrVariantMap = Maps.newHashMap();
         mSampleVcfGenotypeIds = Maps.newHashMap();
         mExcludedRegions = ExcludedRegions.getPolyGRegions(mConfig.RefGenVersion);
     }
@@ -75,151 +75,223 @@ public class DepthAnnotator
         long startTimeMs = System.currentTimeMillis();
 
         VcfFileReader reader = new VcfFileReader(mConfig.InputVcf);
-
         VCFHeader vcfHeader = reader.vcfHeader();
 
         if(!establishGenotypeIds(vcfHeader))
-        {
             System.exit(1);
+
+        reader.close(); // each worker opens its own reader for concurrent region queries
+
+        ensureVcfIndex(vcfHeader); // region queries below require a tabix index
+
+        // partition the genome into windows, in coordinate order, so only a bounded number of
+        // windows is ever resident in memory at once instead of the entire VCF
+        List<ChrBaseRegion> windows = buildWindows();
+
+        Queue<PartitionTask> partitions = new ConcurrentLinkedQueue<>();
+        int taskId = 0;
+
+        for(ChrBaseRegion region : windows)
+        {
+            partitions.add(new PartitionTask(region, taskId++));
         }
 
-        int vcfCount = 0;
+        int regionCount = partitions.size();
 
-        try
+        int threadCount = max(mConfig.Threads, 1);
+
+        // cap of windows held in memory at once (>= threadCount, plus a little read-ahead);
+        // kept tight because each window holds its variants and (while slicing) its BAM reads
+        int maxPendingRegions = max(threadCount + 4, 8);
+
+        DepthWriter depthWriter = new DepthWriter(mConfig, vcfHeader, maxPendingRegions);
+
+        if(regionCount == 0)
         {
-            String currentChromosome = "";
-            List<VariantContext> variantsList = null;
-
-            for(VariantContext variantContext : reader.iterator())
-            {
-                ++vcfCount;
-
-                if(excludeVariant(variantContext))
-                    continue;
-
-                String chromosome = variantContext.getContig();
-
-                if(!chromosome.equals(currentChromosome))
-                {
-                    variantsList = Lists.newArrayList();
-                    mChrVariantMap.put(chromosome, variantsList);
-                    currentChromosome = chromosome;
-                }
-
-                // create new instances of each variant to set depth values against
-                VariantContext newVariant = new VariantContextBuilder(variantContext)
-                        .genotypes(variantContext.getGenotypes())
-                        .filters(variantContext.getFilters())
-                        .make();
-
-                variantsList.add(newVariant);
-            }
-        }
-        catch(Exception e)
-        {
-            SV_LOGGER.error("error reading vcf({}): {}", mConfig.InputVcf, e.toString());
-            System.exit(1);
-        }
-
-        SV_LOGGER.info("loaded {} variants from vcf({})", vcfCount, mConfig.InputVcf);
-
-        if(mChrVariantMap.isEmpty())
-        {
-            SV_LOGGER.warn("all variants filtered from vcf({})", vcfCount, mConfig.InputVcf);
+            // still write a header-only VCF (as the full-load version did) so downstream has input
+            SV_LOGGER.warn("no regions to process");
+            depthWriter.close();
             return;
         }
 
-        if(mConfig.PerfLogTime > 0)
-            analyseVariantDistribution();
+        SV_LOGGER.info("depth annotation: {} regions, threads({}) partitionSize({}) maxPending({})",
+                regionCount, threadCount, mConfig.PartitionSize, maxPendingRegions);
 
-        List<DepthTask> depthTasks = Lists.newArrayList();
+        List<DepthPartitionThread> workers = Lists.newArrayList();
 
-        for(HumanChromosome chromosome : HumanChromosome.values())
+        for(int i = 0; i < min(regionCount, threadCount); ++i)
         {
-            String chrStr = mConfig.RefGenVersion.versionedChromosome(chromosome.toString());
-
-            List<VariantContext> variantsList = mChrVariantMap.get(chrStr);
-
-            if(variantsList == null)
-                continue;
-
-            DepthTask depthTask = new DepthTask(chrStr, mConfig, mSampleVcfGenotypeIds);
-            depthTask.addVariants(variantsList);
-            depthTasks.add(depthTask);
+            workers.add(new DepthPartitionThread(
+                    mConfig, partitions, mSampleVcfGenotypeIds, mExcludedRegions, depthWriter));
         }
 
-        final List<Callable> callableList = depthTasks.stream().collect(Collectors.toList());
-        TaskExecutor.executeTasks(callableList, mConfig.Threads);
+        if(!runThreadTasks(new ArrayList<>(workers)))
+            System.exit(1);
 
-        // write output VCF
-        writeVcf(vcfHeader, depthTasks);
+        depthWriter.close();
 
         SV_LOGGER.info("SvPrep depth annotation complete, mins({})", runTimeMinsStr(startTimeMs));
 
-        PerformanceCounter perfCounter = depthTasks.get(0).getPerfCounter();
-        for(int i = 1; i < depthTasks.size(); ++i)
+        if(!workers.isEmpty())
         {
-            perfCounter.merge(depthTasks.get(i).getPerfCounter());
-        }
+            PerformanceCounter perfCounter = workers.get(0).getPerfCounter();
 
-        perfCounter.logStats();
+            for(int i = 1; i < workers.size(); ++i)
+            {
+                perfCounter.merge(workers.get(i).getPerfCounter());
+            }
+
+            perfCounter.logStats();
+        }
     }
 
-    private void writeVcf(final VCFHeader header, final List<DepthTask> depthTasks)
+    private List<ChrBaseRegion> buildWindows()
     {
-        SV_LOGGER.info("writing VCF: {}", mConfig.OutputVcf);
-
-        VariantContextWriter writer = new VariantContextWriterBuilder()
-                .setReferenceDictionary(header.getSequenceDictionary())
-                .setOutputFile(mConfig.OutputVcf)
-                .setOutputFileType(VariantContextWriterBuilder.OutputType.BLOCK_COMPRESSED_VCF)
-                .build();
-
-        if(!header.hasFormatLine(ALLELE_FRACTION))
-            header.addMetaDataLine(new VCFFormatHeaderLine(ALLELE_FRACTION, 1, VCFHeaderLineType.Float, ALLELE_FRACTION_DESC));
-
-        if(!header.hasFormatLine(REF_DEPTH))
+        // with specific regions set (a testing/debug path) fall back to fixed-size partitioning
+        if(!mConfig.SpecificRegions.isEmpty())
         {
-            header.addMetaDataLine(new VCFFormatHeaderLine(REF_DEPTH, 1, VCFHeaderLineType.Integer, REF_DEPTH_DESC));
-            header.addMetaDataLine(new VCFInfoHeaderLine(REF_DEPTH, 1, VCFHeaderLineType.Integer, REF_DEPTH_DESC));
-        }
-        else if(mConfig.VcfTagPrefix != null)
-        {
-            header.addMetaDataLine(new VCFFormatHeaderLine(
-                    mConfig.getVcfTag(REF_DEPTH), 1, VCFHeaderLineType.Integer, REF_DEPTH_DESC));
-            header.addMetaDataLine(new VCFInfoHeaderLine(
-                    mConfig.getVcfTag(REF_DEPTH), 1, VCFHeaderLineType.Integer, REF_DEPTH_DESC));
+            List<ChrBaseRegion> regions = Lists.newArrayList();
+
+            for(HumanChromosome chromosome : HumanChromosome.values())
+            {
+                String chrStr = mConfig.RefGenVersion.versionedChromosome(chromosome.toString());
+                regions.addAll(partitionChromosome(chrStr, mConfig.RefGenVersion,
+                        mConfig.SpecificRegions, mConfig.PartitionSize));
+            }
+
+            return regions;
         }
 
-        if(!header.hasFormatLine(REF_DEPTH_PAIR))
-        {
-            header.addMetaDataLine(new VCFFormatHeaderLine(REF_DEPTH_PAIR, 1, VCFHeaderLineType.Integer, REF_DEPTH_PAIR_DESC));
-            header.addMetaDataLine(new VCFInfoHeaderLine(REF_DEPTH_PAIR, 1, VCFHeaderLineType.Integer, REF_DEPTH_PAIR_DESC));
-        }
-        else if(mConfig.VcfTagPrefix != null)
-        {
-            header.addMetaDataLine(new VCFFormatHeaderLine(
-                    mConfig.getVcfTag(REF_DEPTH_PAIR), 1, VCFHeaderLineType.Integer, REF_DEPTH_PAIR_DESC));
-
-            header.addMetaDataLine(new VCFInfoHeaderLine(
-                    mConfig.getVcfTag(REF_DEPTH_PAIR), 1, VCFHeaderLineType.Integer, REF_DEPTH_PAIR_DESC));
-        }
-
-        writer.writeHeader(header);
-
-        for(HumanChromosome chromosome : HumanChromosome.values())
-        {
-            String chrStr = mConfig.RefGenVersion.versionedChromosome(chromosome.toString());
-            DepthTask depthTask = depthTasks.stream().filter(x -> x.chromosome().equals(chrStr)).findFirst().orElse(null);
-
-            if(depthTask == null)
-                continue;
-
-            depthTask.variants().forEach(x -> writer.add(x));
-        }
-
-        writer.close();
+        return buildGapAlignedWindows();
     }
+
+    // Cut window boundaries only at gaps larger than ProximityDistance, so no proximity group (the
+    // unit DepthTask slices) is ever split and output matches the full-load run exactly. A window
+    // closes once it hits PartitionSize and the next gap appears. Positions from a light bgzf scan.
+    private List<ChrBaseRegion> buildGapAlignedWindows()
+    {
+        // rank of each chromosome in HumanChromosome order (the order the full-load version wrote)
+        Map<String,Integer> chromosomeRank = Maps.newHashMap();
+        for(HumanChromosome chromosome : HumanChromosome.values())
+            chromosomeRank.put(mConfig.RefGenVersion.versionedChromosome(chromosome.toString()),
+                    chromosome.ordinal());
+
+        Set<String> seenChromosomes = new HashSet<>();
+        List<ChrBaseRegion> windows = Lists.newArrayList();
+
+        String currentChromosome = null;
+        int windowStart = -1;
+        int prevPosition = -1;
+
+        try(BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new BlockCompressedInputStream(new File(mConfig.InputVcf)))))
+        {
+            String line;
+            while((line = reader.readLine()) != null)
+            {
+                if(line.isEmpty() || line.charAt(0) == '#')
+                    continue;
+
+                int tab1 = line.indexOf('\t');
+                int tab2 = line.indexOf('\t', tab1 + 1);
+                String chromosome = line.substring(0, tab1);
+
+                if(!chromosomeRank.containsKey(chromosome))
+                    continue;
+
+                int position = Integer.parseInt(line.substring(tab1 + 1, tab2));
+
+                if(!chromosome.equals(currentChromosome))
+                {
+                    if(currentChromosome != null)
+                        windows.add(
+                                new ChrBaseRegion(currentChromosome, windowStart, prevPosition));
+
+                    // a contig split into separate blocks would produce overlapping windows and
+                    // duplicate records
+                    if(!seenChromosomes.add(chromosome))
+                    {
+                        SV_LOGGER.error("input VCF({}) not sorted: {} in separate blocks",
+                                mConfig.InputVcf, chromosome);
+                        System.exit(1);
+                    }
+
+                    currentChromosome = chromosome;
+                    windowStart = position;
+                    prevPosition = position;
+                    continue;
+                }
+
+                if(prevPosition - windowStart + 1 >= mConfig.PartitionSize
+                && position - prevPosition > mConfig.ProximityDistance)
+                {
+                    windows.add(new ChrBaseRegion(currentChromosome, windowStart, prevPosition));
+                    windowStart = position;
+                }
+
+                prevPosition = position;
+            }
+
+            if(currentChromosome != null)
+                windows.add(new ChrBaseRegion(currentChromosome, windowStart, prevPosition));
+        }
+        catch(Exception e)
+        {
+            SV_LOGGER.error("failed to pre-scan VCF({}) for window boundaries: {}",
+                    mConfig.InputVcf, e.toString());
+            System.exit(1);
+        }
+
+        // order windows by chromosome (HumanChromosome order) regardless of input contig order;
+        // stable sort keeps each chromosome's windows in coordinate order (no-op if sorted)
+        windows.sort(Comparator.comparingInt(window -> chromosomeRank.get(window.Chromosome)));
+
+        return windows;
+    }
+
+    // region (tabix) queries need an index next to the bgzipped input; create it if missing, and
+    // rebuild it if older than the VCF (a stale index would silently miss variants)
+    private void ensureVcfIndex(final VCFHeader header)
+    {
+        File vcfFile = new File(mConfig.InputVcf);
+        File indexFile = new File(mConfig.InputVcf + TABIX_EXTENSION);
+
+        if(indexFile.exists())
+        {
+            if(indexFile.lastModified() >= vcfFile.lastModified())
+                return;
+
+            SV_LOGGER.warn("tabix index({}) is older than input VCF, rebuilding", indexFile);
+        }
+
+        if(!mConfig.InputVcf.endsWith(".gz"))
+        {
+            SV_LOGGER.error("input VCF({}) must be bgzipped and tabix-indexed for region queries",
+                    mConfig.InputVcf);
+            System.exit(1);
+        }
+
+        SV_LOGGER.info("creating tabix index for input VCF({})", mConfig.InputVcf);
+
+        try
+        {
+            Path vcfPath = Paths.get(mConfig.InputVcf);
+
+            TabixIndex index = IndexFactory.createTabixIndex(
+                    vcfPath.toFile(), new VCFCodec(), TabixFormat.VCF,
+                    header.getSequenceDictionary());
+
+            index.writeBasedOnFeaturePath(vcfPath);
+        }
+        catch(Exception e)
+        {
+            SV_LOGGER.error("failed to create tabix index for input VCF({}): {}",
+                    mConfig.InputVcf, e.toString());
+            System.exit(1);
+        }
+    }
+
+    private static final String TABIX_EXTENSION = ".tbi";
 
     private boolean establishGenotypeIds(final VCFHeader header)
     {
@@ -250,99 +322,6 @@ public class DepthAnnotator
         }
 
         return true;
-    }
-
-    private void analyseVariantDistribution()
-    {
-        Map<Integer,Integer> groupFrequencies = Maps.newHashMap();
-
-        int totalGroups = 0;
-        int totalVariants = 0;
-        long estimatedReads = 0;
-
-        for(HumanChromosome chromosome : HumanChromosome.values())
-        {
-            String chrStr = mConfig.RefGenVersion.versionedChromosome(chromosome.toString());
-
-            List<VariantContext> variants = mChrVariantMap.get(chrStr);
-
-            if(variants == null)
-                continue;
-
-            int soloVariants = 0;
-            int groupCount = 0;
-
-            int index = 0;
-            while(index < variants.size())
-            {
-                VariantContext variant = variants.get(index);
-
-                int variantCount = 1;
-
-                int posStart = variant.getStart();
-                int posEnd = posStart;
-                int nextIndex = index + 1;
-                while(nextIndex < variants.size())
-                {
-                    VariantContext nextVariant = variants.get(nextIndex);
-
-                    if(nextVariant.getStart() - posEnd > mConfig.ProximityDistance)
-                        break;
-
-                    posEnd = nextVariant.getStart();
-                    ++variantCount;
-                    ++nextIndex;
-                }
-
-                Integer countFrequency = groupFrequencies.get(variantCount);
-                groupFrequencies.put(variantCount, countFrequency != null ? countFrequency + 1 : 1);
-                ++groupCount;
-                ++totalGroups;
-                totalVariants += variantCount;
-
-                if(variantCount == 1)
-                    ++soloVariants;
-
-                estimatedReads += (posEnd - posStart + 2000);
-
-                index += variantCount;
-            }
-
-            SV_LOGGER.debug("chr({}) variants({}) group({}) soloVariants({} pct={})",
-                    chrStr, variants.size(), groupCount, soloVariants, format("%.3f", soloVariants / (double)variants.size()));
-        }
-
-        int largeGroupCount = 0;
-        int largeVariantsCount = 0;
-
-        for(Map.Entry<Integer,Integer> entry : groupFrequencies.entrySet())
-        {
-            if(entry.getKey() >= 25)
-            {
-                ++largeGroupCount;
-                largeVariantsCount += entry.getKey() * entry.getValue();
-            }
-            else
-            {
-                SV_LOGGER.debug("group count({}) frequency({}) total variants({})",
-                        entry.getKey(), entry.getValue(), entry.getKey() * entry.getValue());
-            }
-        }
-
-        SV_LOGGER.debug("large group count({}) total variants({})", largeGroupCount, largeVariantsCount);
-
-        SV_LOGGER.debug("total variants({}) groups({}) estimated reads({})", totalVariants, totalGroups, estimatedReads);
-    }
-
-    private boolean excludeVariant(final VariantContext variant)
-    {
-        if(mExcludedRegions.stream().anyMatch(x -> x.containsPosition(variant.getStart())))
-            return true;
-
-        if(mConfig.SpecificRegions.isEmpty())
-            return false;
-
-        return mConfig.SpecificRegions.stream().noneMatch(x -> x.containsPosition(variant.getContig(), variant.getStart()));
     }
 
     public static void main(@NotNull final String[] args)
